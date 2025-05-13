@@ -1,0 +1,69 @@
+import pathlib
+import json
+import re
+import pandas as pd
+from bson import json_util
+from pymongo import MongoClient
+
+db = MongoClient("mongodb://ec2-3-149-9-113.us-east-2.compute.amazonaws.com:27017").chatdb
+
+#load all csvs in a given directory into MongoDB, one collection per file
+def csv_dir_to_mongo(path):
+    for csv_file in path.glob("*.csv"):
+        col_name = csv_file.stem
+        col = db[col_name]
+        df = pd.read_csv(csv_file)
+        json_str = df.to_json(orient="records", default_handler=str)
+        records = json.loads(json_str)
+        for i, record in enumerate(records):
+            record["_id"] = i
+            col.replace_one(filter={"_id": i}, replacement=record, upsert=True)
+
+
+#convert json-like string into a Python object
+def _to_py(txt):
+    try:                                
+        return json_util.loads(txt)
+    except:                     
+        txt2 = re.sub(r'([{,]\s*)([A-Za-z_]\w*)(\s*:)', r'\1"\2"\3', txt) 
+        # add quotes around keys to make it valid Python dict (e.g., name: "Bob" → "name": "Bob"), learned re on git
+        return ast.literal_eval(txt2)
+    #match basic MongoDB shell-style commands like: db.collection.method(args)
+    cmdRE = re.compile(r'db\.(\w+)\.(\w+)\((.*)\)\s*$', re.DOTALL)
+    # this works like: (user)(find)({"age": {"$gt": 25}), also re learned on git
+
+#run MongoDB command string like db.Users.find({...})
+def run_mongo(cmd):
+    cmd = cmd.strip()
+    if cmd == "db.getCollectionNames()":
+        return db.list_collection_names()
+
+    #cut off.limit(N) since reader only does for 3
+    ext = re.search(r'(\.limit\(\s*(\d+)\s*\))', cmd)
+    limit = int(ext.group(2)) if ext and ext.group(2) else None
+    cmd = cmd[:ext.start()] if ext else cmd
+
+    # db.<coll>.<method>(args)
+    coll, method, arg_txt = cmdRE.match(cmd).groups()
+    args = _to_py(f'[{arg_txt}]') or []
+    if method in ("find", "findOne"):
+        cur = db[coll].find(*args[:2]) if method == "find" else db[coll].find_one(*args)
+        return list(cur.limit(limit)) if limit and method == "find" else cur
+    if method == "aggregate":
+        return list(db[coll].aggregate(args[0] if args else []))
+
+    # writes out
+    oper = {
+        "insertOne":  "insert_one",
+        "insertMany": "insert_many",
+        "updateOne":  "update_one",
+        "updateMany": "update_many",
+        "deleteOne":  "delete_one",
+    }[method]
+    return getattr(db[coll], oper)(*args)
+
+if __name__ == "__main__": #read in DBS to mongodb
+    base = pathlib.Path(__file__).resolve().parent / "datasets"
+    csv_dir_to_mongo(base / "brazil_raw")
+    csv_dir_to_mongo(base / "grocery_supply_raw")
+    csv_dir_to_mongo(base / "retail_raw")
