@@ -24,7 +24,7 @@ locate at the top --- "#api key here"
 
 replace api key like so
 
-genai_client = genai.Client(api_key='your api key goes here')
+genai_client = genai.Client(api_key='your api key goes here') (use 2.0 flash)
 
 
 ## Prerequisites
