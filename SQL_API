@@ -1,0 +1,124 @@
+from google import genai
+import pandas as pd
+from SQL_Handler import run_sql
+from pprint import pprint
+
+client = genai.Client(api_key="")
+
+def build_prompt(user_prompt):
+    rules = """
+    You are an assistant that turns natural-language questions into MySQL commands OR explains the schema of the database.
+
+    Tables & Samples- Users should be able to ask what tables exist, view table attributes, and retrieve sample rows.
+    - List all tables:
+    every table with E is in the Ecommerce dataset, every table with G is in the Grocery dataset, every table with R is in the Retail dataset
+    - Show table columns:
+    SHOW COLUMNS FROM <table>;
+    - Preview rows:
+    SELECT * FROM <table> LIMIT n;
+
+    Sample Queries-Generating Sample queries and executing them
+    • “Show me 5 customers from São Paulo.”
+    • “What are the top 3 products by price?”
+    • “Count orders per customer, limit 5.”
+
+    Query Capabilities
+    - SELECT with WHERE, GROUP BY, HAVING
+    - ORDER BY, LIMIT, OFFSET
+    - JOINs (INNER JOIN, LEFT JOIN)
+
+    Data Modification
+    - INSERT INTO … VALUES …
+    - UPDATE … SET … WHERE …
+    - DELETE FROM … WHERE …
+
+    Output Rules
+    1. Return ONLY one valid SQL statement with no explanations.
+    2. Use backticks only for identifiers with special characters.
+    3. Use single quotes for strings.
+    4. Do not generate DROP/TRUNCATE/ALTER/CREATE.
+    5. Be concise and clear in handling all typical MySQL interactions.
+    6. every table with E_ is in the Ecommerce dataset, every table with G_ is in the Grocery dataset, every table with R_ is in the Retail dataset
+
+       E_Customers(
+      customer_id, customer_unique_id, customer_zip_code_prefix,
+      customer_city, customer_state
+    )
+    E_Orders(
+      order_id, customer_id, order_status,
+      order_purchase_timestamp, order_approved_at,
+      order_delivered_carrier_date, order_delivered_customer_date,
+      order_estimated_delivery_date
+    )
+    E_Items(
+      order_id, order_item_id, product_id, seller_id,
+      shipping_limit_date, price, freight_value
+    )
+    E_Payments(
+      order_id, payment_sequential, payment_type,
+      payment_installments, payment_value
+    )
+    E_Products(
+      product_id, product_category_name, product_name_lenght,
+      product_description_lenght, product_photos_qty,
+      product_weight_g, product_length_cm, product_height_cm,
+      product_width_cm
+    )
+    G_Sales(
+      transaction_id, timestamp, product_id, category,
+      customer_type, unit_price, quantity, total, payment_type
+    )
+    G_Stock(
+      id, timestamp, product_id, estimated_stock_pct
+    )
+    G_Sensor(
+      id, timestamp, temperature
+    )    
+
+    R_Features(
+      Store, Date, Temperature, Fuel_Price,
+      MarkDown1, MarkDown2, MarkDown3, MarkDown4, MarkDown5,
+      CPI, Unemployment, IsHoliday
+    )
+    R_Sales(
+      Store, Dept, Date, Weekly_Sales, IsHoliday
+    )
+    R_Stores(
+      Store, Type, Size
+    )
+    """
+text = rules + "\n\nUser Prompt: " + user_prompt
+return text
+
+#Strips blocks that Gemini sometimes adds
+def clean_gemini_output(text):
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1].strip()
+    low = text.lower()
+    if low.startswith("sql:"):
+        text = text[len("sql:"):].strip()
+    elif low.startswith("sql"):
+        text = text[len("sql"):].strip()
+
+    # drops a trailing semicolon
+    if text.endswith(";"):
+        text = text[:-1].strip()
+    return text
+
+#converts a natural-language question into a SQL command using Gemini
+def nl_to_sql(user_prompt):
+    prompt = build_prompt(user_prompt)      # use the provided training
+    response = client.models.generate_content(model="gemini-2.0-flash",contents=prompt)
+    return clean_gemini_output(response.text)
+
+#command-line loop for asking NLIs
+if __name__ == "__main__":
+    nl = input("sql❯ ").strip()
+    sql_string = nl_to_sql(nl)  # Convert NL to SQL using Gemini
+    print(sql_string) # Show the generated SQL command
+    result = run_sql(sql_string)
+    if isinstance(result, pd.DataFrame):
+        pprint(result.to_dict(orient="records"))
+    else:
+        print(result)
