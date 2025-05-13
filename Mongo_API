@@ -1,0 +1,131 @@
+from google import genai
+from Mongo_Handler import run_mongo
+from pprint import pprint
+
+#api key here
+genai_client = genai.Client(api_key='')
+
+#training here
+def build_prompt_mongo(user_prompt: str) -> str:
+    rules = '''
+    You are an assistant that converts natural-language questions into MongoDB shell commands (or, if asked, explains the schema)
+
+    1.  schema exploration
+    • List all collections → db.getCollectionNames()
+    • Show sample docs/documents     → db.<collection>.find({}, { "_id": 0 }).limit(N)
+
+    2.  query generation examples
+    • “Show me 5 customers from São Paulo.”
+    • “What are the top 3 products by price?”
+    • “Count orders per customer — limit 5.”
+
+    3.  capabilities you may use
+    • Simple find with projection
+          db.<coll>.find(<filter>, <proj>).limit(N).pretty()
+    • Aggregation pipelines
+          db.<coll>.aggregate([ { "$match": … }, { "$group": … }, … ])
+          – Supports $match, $group, $sort, $limit, $skip, $project
+          – Supports joins with $lookup
+    • Data modification
+          db.<coll>.insertOne({...})
+          db.<coll>.insertMany([...])
+          db.<coll>.updateOne(<filter>, { "$set": {...} })
+          db.<coll>.updateMany(<filter>, { "$set": {...} })
+          db.<coll>.deleteOne(<filter>)
+
+    4.  output rules(STRICT)
+    1. Return exactly ONE Mongo shell command as a single line.
+       – No markdown, no commentary, no new-lines.
+    2. The command must be valid *extended JSON*:
+         -{ "customer_id": "C123", "age": 30 }
+         -[ { "$match": { "age": { "$gt": 30 } } } ]
+    3. Never use $where, eval, findone (use find instead) or other server-side code execution.
+    4. Dataset prefixes:
+         • E_  → Ecommerce collections
+         • G_  → Grocery collections
+         • R_  → Retail collections
+
+    E_Customers {
+      customer_id, customer_unique_id, customer_zip_code_prefix,
+      customer_city, customer_state
+    }
+    E_Orders {
+      order_id, customer_id, order_status,
+      order_purchase_timestamp, order_approved_at,
+      order_delivered_carrier_date, order_delivered_customer_date,
+      order_estimated_delivery_date
+    }
+    E_Items {
+      order_id, order_item_id, product_id, seller_id,
+      shipping_limit_date, price, freight_value
+    }
+    E_Payments {
+      order_id, payment_sequential, payment_type,
+      payment_installments, payment_value
+    }
+    E_Products {
+      product_id, product_category_name, product_name_lenght,
+      product_description_lenght, product_photos_qty,
+      product_weight_g, product_length_cm, product_height_cm,
+      product_width_cm
+    }
+    G_Sales {
+      transaction_id, timestamp, product_id, category,
+      customer_type, unit_price, quantity, total, payment_type
+    }
+    G_Stock {
+      id, timestamp, product_id, estimated_stock_pct
+    }
+    G_Storage {
+      id, timestamp, temperature
+    }
+    R_Features {
+      Store, Date, Temperature, Fuel_Price,
+      MarkDown1, MarkDown2, MarkDown3, MarkDown4, MarkDown5,
+      CPI, Unemployment, IsHoliday
+    }
+    R_Sales {
+      Store, Dept, Date, Weekly_Sales, IsHoliday
+    }
+    R_Stores {
+      Store, Type, Size
+'''
+    output = rules + "\n\nUser Prompt: " + user_prompt
+return output
+
+
+def clean_mongo_output(text):
+    #strip fences and also leading labels
+    text = text.strip()
+    if text.startswith('```'):
+        text = text.split('```')[1].strip()
+        # Remove trailing semicolon
+    lower = text.lower()
+    if lower.startswith("mongo:"):
+        text = text[len("mongo:"):].strip()
+    elif lower.startswith("mongo"):
+        text = text[len("mongo"):].strip()
+    return text
+
+
+#convert nli to a MongoDB command, run it, and print the result
+def nl_to_mongo(user_prompt):
+    prompt = build_prompt_mongo(user_prompt)  #build  full Gemini prompt using user's input
+    resp = genai_client.models.generate_content(
+        model='gemini-2.0-flash', contents=prompt)  #prompt gets sent to gemini
+    cmd = clean_mongo_output(resp.text)
+    try:
+        print(cmd)
+        result = run_mongo(cmd)  # run_mongo now gets a str, runs command and gets output
+        pprint(result)
+    except Exception as e:
+        print(e)
+
+
+# command-line for asking NLIs
+def main():
+        nl = input('mongo❯ ').strip()
+        nl_to_mongo(nl)
+
+if __name__ == '__main__':
+    main()
