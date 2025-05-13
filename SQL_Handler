@@ -1,0 +1,35 @@
+import pathlib
+import pandas as pd
+from sqlalchemy import create_engine
+from sqlalchemy import text
+
+#connect to MySQL on EC2
+engine = create_engine(
+   "mysql+pymysql://chatuser:Dsci-351@ec2-3-149-9-113.us-east-2.compute.amazonaws.com:3306/chatdb")
+
+# loading every CSV in a directory into MySQL, one table per file
+def csv_to_mysql(path):
+   for csv in path.glob("*.csv"):
+       table_name = csv.stem.replace(" ", "_").replace("-", "_")
+       df = pd.read_csv(csv)
+       df.to_sql(name=table_name, con=engine, if_exists="replace", index=False)
+
+#detect data modification 
+# added this after trouble with row updates showing up for regular queries
+def run_sql(sql):
+    sql = sql.strip()
+    if not sql:
+        return "No SQL provided."
+    with engine.begin() as conn:
+        cmd = sql.split()[0].upper()
+        if cmd in ("INSERT", "UPDATE", "DELETE"):
+            res = conn.execute(text(sql))
+            return f"{res.rowcount} row(s) affected."
+        else:
+            return pd.read_sql(sql, conn)
+
+if __name__ == "__main__":
+   base_path = pathlib.Path(__file__).resolve().parent / "datasets"
+   csv_to_mysql(base_path / "brazil_raw")
+   csv_to_mysql(base_path / "grocery_supply_raw")
+   csv_to_mysql(base_path / "retail_raw")
